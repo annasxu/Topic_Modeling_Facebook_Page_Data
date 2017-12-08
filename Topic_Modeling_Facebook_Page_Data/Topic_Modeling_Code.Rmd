@@ -1,0 +1,183 @@
+---
+title: "Text Mining Project"
+output: html_document
+---
+```{r}
+###############################################################################
+## Facebook Page Data Topic Modeling and Sentiment Analysis
+## Author: Anna Xu
+## November 15th 2017
+###############################################################################
+#Installing libraries, access the Facebook API, and store Facebook token
+library(ggplot2)
+library(devtools)
+#install_github("pablobarbera/Rfacebook/Rfacebook")
+library("Rfacebook", lib.loc="/Library/Frameworks/R.framework/Versions/3.3/Resources/library")
+#token generated here: https://developers.facebook.com/tools/explorer
+token = 'EAACEdEose0cBAA80PZCkFWAJZCpPAHuLFCr1nByW8LQ0GE8PsdZBeyWZC2ZCcpy7NFqM77kZCeZCAXLcNFGZCR0ePNCZBN1CURj9CYGJo83WnzRl3RPoJnsqTFcsjooqQg0iO9mf3bWW71skLPNppvM6HY8YPHynst3kPgR90tOIoj5bdavziOG8Nw6IDmnWfrcoZD'
+library(topicmodels)
+library(tm)
+library(topicmodels)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(tidytext)
+library(mallet)
+library(stringr)
+```
+
+```{r}
+###############################################################################
+##Cleaning the data
+
+page <- getPage("humansofnewyork", token, n = 1, reactions=TRUE)
+page$message = gsub("Episodes", "", page$message)
+page$message = gsub("Full", "", page$message)
+page$message = gsub("[^\x20-\x7E]", "", page$message)
+page$message = tolower(page$message)
+page$message = gsub('[[:punct:]]', '', page$message)
+```
+
+```{r}
+###############################################################################
+##Visualizing Data
+p <- ggplot(page, aes(x=likes_count))
+p + geom_histogram() + labs(x = "Number of Likes", y = "Number of Posts", title = "Humans of New York Distribution of Likes")
+
+p <- ggplot(page, aes(x=comments_count))
+p + geom_histogram() + labs(x = "Number of Comments", y = "Number of Posts", title = "Distribution of Comments")
+
+p <- ggplot(page, aes(x=shares_count))
+p + geom_histogram() + labs(x = "Number of Shares", y = "Number of Posts", title = "Distribution of Shares")
+
+p <- ggplot(page, aes(factor(type), as.numeric(likes_count)))
+p + geom_boxplot() + labs(y = "Number of Likes", x = "Type of Post", title = "Business Insider Box Plots of Likes by Post Type")
+
+length = str_length(page$message)
+hist(length)
+
+p <- ggplot(page, aes(x=length))
+p + geom_histogram() + labs(x = "Number of Characters", y = "Number of Posts", title = "Distribution of Comments")
+
+p <- ggplot(page, aes(x=length))
+p + geom_histogram() + labs(x = "Number of Characters", y = "Frequency", title = "Post Length")
+
+```
+
+
+```{r}
+###############################################################################
+##Create topics with the mallet library 
+
+#2 posts aggregated
+page$newid = rep(1:1000,each= 2)
+newdata = aggregate(page$message~ page$newid, data = page, paste,collapse = ", ")
+message = as.character(newdata$`page$message`)
+newid = as.character(newdata$`page$newid`)
+docs = mallet.import(newid,message,'~/Desktop/stopwords.txt')
+
+newlikes = page$likes_count[1:1000] + page$likes_count[1001:2000]
+
+#1 post
+#docs = mallet.import(page$from_id,page$message,'~/Desktop/stopwords.txt')
+# used the standard list of english stop words https://www.ranks.nl/stopwords
+
+topic.model <- MalletLDA(num.topics=40)
+topic.model$loadDocuments(docs)
+vocabulary <- topic.model$getVocabulary()
+word.freqs <- mallet.word.freqs(topic.model)
+
+## Optimize hyperparameters every 20 iterations,
+## after 50 burn-in iterations.
+#topic.model$setAlphaOptimization(20, 50)
+
+topic.model$train(1000)   #number of iterations
+
+doc.topics <- mallet.doc.topics(topic.model, smoothed=T, normalized=T)
+topic.words <- mallet.topic.words(topic.model, smoothed=T, normalized=T)
+
+mallet.top.words(topic.model, topic.words[7,])
+mallet.topic.labels(topic.model,topic.words,num.top.words=10)
+
+for (i in 1:100) {
+  print(mallet.top.words(topic.model, topic.words[i,])$words)
+}
+
+
+mallet.top.words(topic.model, topic.words[15,])$words
+
+
+
+
+```
+
+
+```{r}
+###############################################################################
+##Evaluating with Topic Appearance
+
+#how many documents contain the 15 top words in each topic?
+nnzero = NULL
+numdocs = NULL
+for (i in 1:40) {
+  
+  words = mallet.top.words(topic.model, topic.words[i,],20)
+  indexes = grep(paste(words$words,collapse="|"), 
+                 page$message)
+  numdocs = c(numdocs,length(indexes))
+}
+hist(numdocs,xlab = "Number of Documents A Topic Appears In", ylab = "Number of Topics", main = "Topic Document Appearance")
+
+
+```
+
+```{r}
+############ Matrix Evaluation
+nnzero = NULL
+for (s in 1:40){
+numdocs = NULL
+for (i in 1:5){
+  for (j in 1:5){
+    words = mallet.top.words(topic.model, topic.words[s,],20)
+    indexes_i = grep(paste(words$words[i]), page$message)
+    indexes_j = grep(paste(words$words[j]), page$message)
+    numdocs = c(numdocs,length(intersect(indexes_i,indexes_j)))
+  }
+}
+numdocs
+mat <- matrix(numdocs, ncol = 5)
+nnzero = c(nnzero,nnzero(mat))
+}
+hist(nnzero,main = "Topics with Nonzero Entries",ylab = "Number of Topics", xlab = "Number of Nonzero Entries")
+```
+
+
+```{r}
+###############################################################################
+##Time Series
+x = rev(seq(1,2000))
+plot(x,doc.topics[,11], xlab = "Post # Since ", ylab = "How Strong A Particular Topic Was For That Post")
+
+mallet.top.words(topic.model, topic.words[40,])$words
+
+x = rev(seq(1,2000))
+
+plot(x,doc.topics[,40], xlab = "Post # Since 10/25/2013", ylab = "Strength of Topic", main = "children, give, child, love, group, piece")
+```
+
+
+```{r}
+#boxplots of the topics
+
+labels = mallet.topic.labels(topic.model,topic.words,num.top.words=3)
+page$topicnum = apply(doc.topics, 1, which.max)
+labels = mallet.topic.labels(topic.model,topic.words,num.top.words=3)
+boxplot(page$likes_count~page$topicnum, las = 2, names = labels, par(mar = c(12, 5, 4, 2)+ 0.1),outline=FALSE,ylab = "Number of Likes", main = "Topics By Likes")
+
+page$topicnum = apply(doc.topics, 1, which.max)
+page$topicnum = sample(page$topicnum)
+labels = mallet.topic.labels(topic.model,topic.words,num.top.words=3)
+boxplot(page$likes_count~page$topicnum, las = 2, names = labels, par(mar = c(12, 5, 4, 2)+ 0.1),outline=FALSE,ylab = "Number of Likes", main="Randomized Likes")
+
+```
+
